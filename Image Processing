@@ -1,0 +1,572 @@
+%---------------------RICE LINE SCAN IMAGE PROCESSING --------------------------
+% SUMMARY
+% loads each image from folder in order
+% averages pixels in each image to one line 1 x 1x1024x3 (image is 512x1024)
+% want to average over 512 lines
+% add all image together (spatially) line by line
+% average dark image and subtract ( remove DSNU)
+% average white image 512 lines
+% raw image divided by white image (remove PSNU)
+% flat image processed image
+% take mean R, G and B pixel values for each object
+
+%------------------------FOR NEW IMAGE SET---------------------------------
+% change folder path names
+% save best image mask
+% run zero image with that mask
+% save all the masked images
+% look at region detection and choose desired regions
+% choose either whole region or specified region for pixel value analysis
+%--------------------------------------------------------------------------
+clc;                     % Clear command window.
+clear;
+workspace;              % Make sure the workspace panel with all the variables is showing.
+imtool close all;       % Close all figures.
+
+minAngle = 45;           % minimum measured angle 
+maxAngle = 45;          % maximum measured angle
+increment = 3;          % experimental angle increment
+i = 1;                  % iteration variable
+regionExtend = 10;      % extension of chosen pixel region from object center point (reduce for smaller objects)
+
+%------------------------------FOLDER PATHS--------------------------------
+raw_base_name = 'C:\Users\rebec\OneDrive\Desktop\Uni\Imperial MSc\BUHLER\camera_images\new_rig\rice_test3\raw_images\';     % base folder name to save reconstructed image to
+masked_base_name = 'C:\Users\rebec\OneDrive\Desktop\Uni\Imperial MSc\BUHLER\camera_images\new_rig\rice_test3\masked_images\';     % base folder name to save reconstructed image to
+test_folder = 'C:\Users\rebec\OneDrive\Desktop\Uni\Imperial MSc\BUHLER\camera_images\new_rig\rice_test3\line_images\';  % base folder name for line image
+darkImageFile = 'C:\Users\rebec\OneDrive\Desktop\Uni\Imperial MSc\BUHLER\camera_images\new_rig\rice_test3\line_images\reference_images\dark_image.bmp'; 
+whiteImageFileBase = 'C:\Users\rebec\OneDrive\Desktop\Uni\Imperial MSc\BUHLER\camera_images\new_rig\rice_test3\line_images\reference_images\white_image';
+%chosenMaskFile = 'C:\Users\rebec\OneDrive\Desktop\Uni\Imperial MSc\BUHLER\camera_images\new_rig\rice_test\masked_images\mask.bmp';
+%loadMask = imread(chosenMaskFile);
+%cropMask = logical(loadMask);
+prompt = "Save images? Y/N \n";     % user prompt for saving raw/masked images
+save = input(prompt, 's');
+if isempty(save)
+    txt = 'N';
+end
+
+for angle = minAngle:increment:maxAngle         % for loop for raw image at each angle *
+   imageNum = num2str(angle);                  % converts image number to a character for use in filename*
+   whiteImageFile = [whiteImageFileBase imageNum '.bmp'];         % white image for the defined angle
+   angles(1,i) = angle;                        % creates an array of angles*
+    raw_save_name = fullfile(raw_base_name, imageNum);               % folder for saving raw image
+    if isfile(raw_save_name)                    % checks that the file does not already exist
+       error('File is existing already: %s', raw_save_name);
+    end
+    % folder for saving masked images
+    masked_save_name = fullfile(masked_base_name, imageNum);         % updates file name with name of image
+    if isfile(masked_save_name)                 % checks that the file does not already exist
+       error('File is existing already: %s', masked_save_name);
+    end
+
+    % folder for reading line images
+    myFolder = fullfile(test_folder, imageNum);
+    %---------load and average dark image --------------------------------- 
+    rawDark = imread(darkImageFile); 
+    DarkAvImageArray = LineAverage(rawDark);
+    %---------load and average white image --------------------------------    
+    rawWhite = imread(whiteImageFile); 
+    WhiteAvImageArray = LineAverage(rawWhite);
+    %----------------------------------------------------------------------
+    % natural sort folder images by name 001, 002 etc
+    if ~isdir(myFolder)
+      errorMessage = sprintf('Error: The following folder does not exist:\n%s', myFolder);
+      uiwait(warndlg(errorMessage));
+      return;
+    end
+    filePattern = fullfile(myFolder, '*.bmp');
+    bmpFiles = dir(filePattern);
+    for k = 1:length(bmpFiles)      % for all line images in specified folder
+        baseFileName = bmpFiles(k).name;
+        fullFileName = fullfile(myFolder, baseFileName);
+    %     fprintf(1, 'Now reading %s\n', fullFileName);
+        rawImage = imread(fullFileName);        % reads raw line image from file
+        avImageArray = LineAverage(rawImage);   % averages raw image
+        tempLineImage = imsubtract(avImageArray, DarkAvImageArray);   % subtract dark line image from averaged line scan image to remove shot noise
+        finalLineImage = imdivide(tempLineImage, WhiteAvImageArray);       % divide each averaged line image by averaged white reference image PNU
+        finalLineImage(isnan(finalLineImage))=0;    % converts all NaNs to 0 from white division i.e. from division of 0
+        backgroundMask = Extractbackground(finalLineImage);     % builds a mask for each line image UNUSED
+        buildMask(k,:,:) = backgroundMask;  % builds full mask from lines UNUSED
+        MaskedImage = backgroundMask.*finalLineImage;        % combines image with background mask to remove background UNUSED
+        finalRawImage(k,:,:) = finalLineImage;  % unmasked image full image
+        finalImage(k,:,:) = MaskedImage;     % rebuild  masked image with averaged and masked lines UNUSED
+        avImageArray = zeros(1,1024,3);     % clear line image array
+        drawnow; % Force display to update immediately. 
+    end
+
+    croppedImage = edgeDetection(finalRawImage);        % crops raw image
+      if angle == minAngle        % creates a mask for only the first angle to use on every image*
+          cropMask = Extractbackground(croppedImage);     % builds a mask for the first cropped image
+      end 
+    fullmask = cropMask.*croppedImage;  % applies mask to every cropped image
+
+% SAVE MASK OF MIN ANGLE IMAGE  
+    testMask = cropMask;
+    bwTestmask = cast(testMask, 'like', fullmask); 
+    bwTestmask = rgb2gray(bwTestmask);
+    logicalMaskFile = fullfile(masked_base_name, imageNum,'.bmp');
+   % imwrite(bwTestmask,logicalMaskFile);
+   % imwrite(fullmask, logicalMaskFile);
+   % imshow(bwTestmask);
+
+    %--------------IMPORTANT---------------------
+    % finalRawImage -- full image NO mask
+    % finalImage -- full reconstructed image WITH mask
+    % cropMask -- cropped mask
+    % fullmask -- cropped image with mask
+    %--------------------------------------------------
+    if save == 'Y'
+    imwrite(croppedImage, [raw_save_name, '.bmp']);       % save raw image to folder save_name.bmp
+    imwrite(fullmask, [masked_save_name, '.bmp']);       % save masked image to folder save_name.bmp
+    else
+    end
+
+    [meanRGB, area, centerpos, numberOfBlobs] = BlobDetection(cropMask, fullmask);         % get region properties 
+    if numberOfBlobs > 0
+         fprintf(1, '\n-----------------Angle: %s ---------------------\n', imageNum);
+         fprintf(1, 'Object  Area  Mean R  Mean G  Mean B\n');
+         fprintf(1, '-----------------------------------------------\n');
+ 	   % for blobNumber = [7 9 10]
+        for blobNumber = 1 : numberOfBlobs
+            blobArea(1,blobNumber) = area(blobNumber);
+  		    fprintf(1, '#%3d  %5d  %6.2f  %6.2f  %6.2f\n', blobNumber, area(blobNumber), ...
+              meanRGB(blobNumber, 1), meanRGB(blobNumber, 2), meanRGB(blobNumber, 3));
+            % record values
+            markerpos(blobNumber, :) = centerpos(blobNumber, :);
+            meanR(blobNumber,i) = meanRGB(blobNumber,1);    % records mean R, G and B pixel values for every region at every angle
+            meanG(blobNumber,i) = meanRGB(blobNumber,2);
+            meanB(blobNumber,i) = meanRGB(blobNumber,3);
+            userRegion(:,:,blobNumber) = [centerpos(blobNumber,1)-regionExtend centerpos(blobNumber,2)-regionExtend; centerpos(blobNumber,1)+regionExtend centerpos(blobNumber,2)-regionExtend; centerpos(blobNumber,1)+regionExtend centerpos(blobNumber,2)+regionExtend;centerpos(blobNumber,1)-regionExtend centerpos(blobNumber,2)+regionExtend] ; % defines a smaller user region around central point of each detected region
+            % record mean RGB values for selection of pixels around center
+            % of each point
+            [avIntensity] = getIntensity(fullmask, blobNumber, userRegion);
+            angleIntensity(i,blobNumber, :) = avIntensity;  % saves region intesity for each angle
+        end
+
+    else
+	    % Alert user that no colored blobs were found.
+	    fprintf("No blobs of the specified color were found in the image");
+    end % blobs
+
+%-------------------------VIEW ALL IMAGES----------------------------------   
+     figure()                      
+%    imshow(finalRawImage);         % unmasked full raw image
+%     imshow(finalImage)            % masked full image
+%     imshow(cropMask)              % cropped mask
+     imshow(fullmask);             % cropped masked image
+  
+%----------------------TO VIEW DETECTED REGIONS----------------------------
+%     figure()
+%     markedImage = insertMarker(fullmask,markerpos,'x','size',1);  % label blobs on masked image to check the correct objects are being detected
+%     imshow(markedImage); hold on;
+%     impixelinfo;
+%     hold off;
+%----------------------TO VIEW SPECIFIED REGIONS---------------------------
+%     figure()
+%     blobNumber = 10;
+%     markedCropImage = insertMarker(fullmask,userRegion(:,:,blobNumber),'x','size',1);
+%     imshow(markedCropImage);
+%     impixelinfo;
+
+    i = i+1;        % i increments with every angle
+end     % angles
+
+% %---------------------------direct image-----------------------------------
+% raw_base_name = 'C:\Users\rebec\OneDrive\Desktop\Uni\Imperial MSc\BUHLER\camera_images\new_rig\rice_test\raw_images\';     % base folder name to save reconstructed image to
+% masked_base_name = 'C:\Users\rebec\OneDrive\Desktop\Uni\Imperial MSc\BUHLER\camera_images\new_rig\rice_test\masked_images\';     % base folder name to save reconstructed image to
+% test_folder = 'C:\Users\rebec\OneDrive\Desktop\Uni\Imperial MSc\BUHLER\camera_images\new_rig\rice_test\line_images\';  % base folder name for line image
+% darkImageFile = 'C:\Users\rebec\OneDrive\Desktop\Uni\Imperial MSc\BUHLER\camera_images\new_rig\rice_test\line_images\reference_images\dark_image.bmp'; 
+% whiteImageFile = 'C:\Users\rebec\OneDrive\Desktop\Uni\Imperial MSc\BUHLER\camera_images\new_rig\rice_test\line_images\reference_images\white_image0.bmp';
+% imageNum = '0';
+% 
+% % folder for reading line images
+% myFolder = fullfile(test_folder, imageNum);
+% %---------load and average dark image --------------------------------- 
+% rawDark = imread(darkImageFile); 
+% DarkAvImageArray = LineAverage(rawDark);
+% %---------load and average white image --------------------------------    
+% rawWhite = imread(whiteImageFile); 
+% WhiteAvImageArray = LineAverage(rawWhite);
+% %----------------------------------------------------------------------
+% % natural sort folder images by name 001, 002 etc
+% if ~isdir(myFolder)
+%   errorMessage = sprintf('Error: The following folder does not exist:\n%s', myFolder);
+%   uiwait(warndlg(errorMessage));
+%   return;
+% end
+% filePattern = fullfile(myFolder, '*.bmp');
+% bmpFiles = dir(filePattern);
+% for k = 1:length(bmpFiles)      % for all line images in specified folder
+%     baseFileName = bmpFiles(k).name;
+%     fullFileName = fullfile(myFolder, baseFileName);
+%     rawImage = imread(fullFileName);        % reads raw line image from file
+%     avImageArray = LineAverage(rawImage);   % averages raw image
+%     tempLineImage = imsubtract(avImageArray, DarkAvImageArray);   % subtract dark line image from averaged line scan image to remove shot noise
+%     finalLineImage = imdivide(tempLineImage, WhiteAvImageArray);       % divide each averaged line image by averaged white reference image PNU
+%     finalLineImage(isnan(finalLineImage))=0;    % converts all NaNs to 0 from white division i.e. from division of 0
+%     backgroundMask = Extractbackground(finalLineImage);     % builds a mask for each line image UNUSED
+%     MaskedImage = backgroundMask.*finalLineImage;        % combines image with background mask to remove background UNUSED
+%     finalRawImage(k,:,:) = finalLineImage;  % unmasked image full image
+%     avImageArray = zeros(1,1024,3);     % clear line image array
+%     drawnow; % Force display to update immediately. 
+% end
+% ZerocroppedImage = edgeDetection(finalRawImage);        % crops raw image
+% Zerofullmask = cropMask.*ZerocroppedImage;
+% figure()
+% imshow(Zerofullmask);
+% imwrite(Zerofullmask, 'C:\Users\rebec\OneDrive\Desktop\Uni\Imperial MSc\BUHLER\camera_images\new_rig\rice_test\masked_images\zero2.bmp')
+%-------------------------------------------------------------------------
+
+% add 0 to top of angle array
+% add mean RGB to array
+% add angle intensity
+% angles
+% meanR(objectNumber,:)
+% meanG(objectNumber,:)
+% meanB(objectNumber,:)
+% angleIntensity(:,objectNumber, 1)
+
+%zero angle values added to existing arrays
+% zero_angle(1,1) = 0;
+% zero_meanR(:,objectNumber) = 
+% zero_meanG(:,objectNumber) = 
+% zero_meanB(:,objectNumber) = 
+% zero_angleIntensity = 
+% angles = horzcat(zero_angle, angles);       % adds 0 to start of angle array
+
+
+
+
+%---------------------product region numbers new rig test1-----------------
+% #2 coffee bean
+% #3 washer
+% #4 rice good
+% #5 rice (very chalky)
+% #6 rice (chalky)
+% #7 almond shell (outside)
+% #9 almond whole
+% #10 almond shell (inside)
+
+%----------------------create plots over all angles------------------------
+%for objectNumber = [7 9 10]  
+%     disp(meanRGB(objectNumber,1));
+%     disp(angle);
+%--------------------ENTIRE REGION ANALYSIS-------------------------------- 
+% % RICE   
+%     objectNumber = 4;
+%     subplot(2,2,1)
+%     %zero angle whole object values
+%     x = 0;
+%     yR = 0.238067578343450;
+%     yG = 0.255277845391284;
+%     yB = 0.284644175869308;
+%     plot(x, yR,'r-*'); hold on;
+%     plot(x,yG,'g-*'); hold on;
+%     plot(x,yB,'b-*'); hold on;
+%     plot(angles, meanR(objectNumber,:),'r-*'); hold on;
+%     plot(angles, meanG(objectNumber,:),'g-*'); hold on;
+%     plot(angles, meanB(objectNumber,:),'b-*'); hold off;
+%     title('Effect of Angular Illumination on Good Rice Reflectance');
+%     xlabel('Illumination angle (degrees)'); 
+%     ylabel('Mean RGB pixel value (normalised)'); 
+%     xlim([0 maxAngle])
+%     ylim([0 0.5])
+%     legend('Red', 'Green','Blue');
+% 
+%     objectNumber = 6;
+%     subplot(2,2,2)
+%     yR = 0.369698588266316;
+%     yG = 0.381097396876085;
+%     yB = 0.390274874245316;
+%     plot(x, yR,'r-*'); hold on;
+%     plot(x,yG,'g-*'); hold on;
+%     plot(x,yB,'b-*'); hold on;
+%     plot(angles, meanR(objectNumber,:),'r-*'); hold on;
+%     plot(angles, meanG(objectNumber,:),'g-*'); hold on;
+%     plot(angles, meanB(objectNumber,:),'b-*'); hold off;
+%     title('Effect of Angular Illumination on Moderately Chalky Rice Reflectance');
+%     xlabel('Illumination angle (degrees)'); 
+%     ylabel('Mean RGB pixel value (normalised)'); 
+%     xlim([0 maxAngle])
+%     ylim([0 0.5])
+%     legend('Red', 'Green','Blue');
+% 
+%     objectNumber = 5;
+%     subplot(2,2,3)
+%     yR = 0.430365531470474;
+%     yG = 0.421103574211028;
+%     yB = 0.419648189089173;
+%     plot(x, yR,'r-*'); hold on;
+%     plot(x,yG,'g-*'); hold on;
+%     plot(x,yB,'b-*'); hold on;
+%     plot(angles, meanR(objectNumber,:),'r-*'); hold on;
+%     plot(angles, meanG(objectNumber,:),'g-*'); hold on;
+%     plot(angles, meanB(objectNumber,:),'b-*'); hold off;
+%     title('Effect of Angular Illumination on Highly Chalky Rice Reflectance');
+%     xlabel('Illumination angle (degrees)'); 
+%     ylabel('Mean RGB pixel value (normalised)'); 
+%     xlim([0 maxAngle])
+%     ylim([0 0.5])
+%     legend('Red', 'Green','Blue');
+
+%COFFEE BEAN
+% zero angle whole object values
+% x = 0;
+% yR = 0.189592619390613;
+% yG = 0.169451271652993;
+% yB = 0.112312841730812;
+% plot(x, yR,'r-*'); hold on;
+% plot(x,yG,'g-*'); hold on;
+% plot(x,yB,'b-*'); hold on;
+% objectNumber = 2;       % region number of desired object
+% plot(angles, meanR(objectNumber,:),'r-*'); hold on;
+% plot(angles, meanG(objectNumber,:),'g-*'); hold on;
+% plot(angles, meanB(objectNumber,:),'b-*'); hold off;
+% title('Effect of Angular Illumination on Coffee Bean Reflectance');
+% xlabel('Illumination angle (degrees)'); 
+% ylabel('Mean R,G and B pixel value (normalised)'); 
+% xlim([0 maxAngle])
+% ylim([0 0.4])
+% legend('Red', 'Green','Blue');
+
+%end
+
+%------------------------SPECIFIED REGION ANALYSIS-------------------------
+%ALMONDS
+% objectNumber = 7;       % region number of desired object
+% subplot(2,2,1)
+% x=0;
+% yR=0.4126;      % zero angle values
+% yG=0.2995;
+% yB=0.1431;
+% plot(x, yR,'r-*'); hold on;
+% plot(x,yG,'g-*'); hold on;
+% plot(x,yB,'b-*'); hold on;
+% plot(angles, angleIntensity(:,objectNumber, 1),'r-*'); hold on;
+% plot(angles, angleIntensity(:,objectNumber, 2),'g-*'); hold on;
+% plot(angles, angleIntensity(:,objectNumber, 3),'b-*'); hold off;
+% title('Effect of Angular Illumination on Almond Shell (outside) Reflectance');
+% xlabel('Illumination angle (degrees)'); 
+% ylabel('Mean R,G and B pixel value (normalised)'); 
+% xlim([0 maxAngle])
+% ylim([0 0.7])
+% legend('Red', 'Green','Blue');
+% 
+% objectNumber = 10;
+% subplot(2,2,2)
+% yR=0.4969;      % zero angle values
+% yG=0.3454;
+% yB=0.1672;
+% plot(x,yR,'r-*'); hold on;
+% plot(x,yG,'g-*'); hold on;
+% plot(x,yB,'b-*'); hold on;
+% plot(angles, angleIntensity(:,objectNumber, 1),'r-*'); hold on;
+% plot(angles, angleIntensity(:,objectNumber, 2),'g-*'); hold on;
+% plot(angles, angleIntensity(:,objectNumber, 3),'b-*'); hold off;
+% title('Effect of Angular Illumination on Almond Shell (inside) Reflectance');
+% xlabel('Illumination angle (degrees)'); 
+% ylabel('Mean R,G and B pixel value (normalised)'); 
+% xlim([0 maxAngle])
+% ylim([0 0.7])
+% legend('Red', 'Green','Blue');
+% 
+% objectNumber = 9;
+% subplot(2,2,3)
+% yR=0.2866;      % zero angle values
+% yG=0.1690 ;
+% yB=0.0591;
+% plot(x,yR,'r-*'); hold on;
+% plot(x,yG,'g-*'); hold on;
+% plot(x,yB,'b-*'); hold on;
+% plot(angles, angleIntensity(:,objectNumber, 1),'r-*'); hold on;
+% plot(angles, angleIntensity(:,objectNumber, 2),'g-*'); hold on;
+% plot(angles, angleIntensity(:,objectNumber, 3),'b-*'); hold off;
+% title('Effect of Angular Illumination on Almond Reflectance');
+% xlabel('Illumination angle (degrees)'); 
+% ylabel('Mean R,G and B pixel value (normalised)'); 
+% xlim([0 maxAngle])
+% ylim([0 0.7])
+% legend('Red', 'Green','Blue');
+
+% subplot(2,2,4)
+% fullmask
+
+
+%------------------------------FUNCTIONS-----------------------------------
+%--------------------averages lines for line image-------------------------
+function[avImageArray] = LineAverage(rawImage)      % averages line scan image column RGB pixel values
+    imageArray = im2double(rawImage);       % do and if statement i.e. if type = double -good if type not equal to double them make it a double
+    maxPixelsX = size(imageArray,2);        % max image pixels in x (width)
+    maxPixelsY = size(imageArray,1);        % max image pixels in y (height)
+    
+    % separate image into RGB channels
+    redChannel = imageArray(:,:,1); % Red channel
+    greenChannel = imageArray(:,:,2); % Green channel
+    blueChannel = imageArray(:,:,3); % Blue channel
+    % sum each colour channel columns (512 pixels) to get 1x1024
+    sumRed = sum(redChannel);
+    sumBlue = sum(blueChannel);
+    sumGreen = sum(greenChannel);
+    % find mean of each colour channel column to get just one average y pixel 1x1024
+    avRed = sumRed/maxPixelsY;
+    avBlue = sumBlue/maxPixelsY;
+    avGreen = sumGreen/maxPixelsY;
+    % recontruct averaged image array into a 1x3088x3 for each line scan
+    % avImageArray contains the averaged line scan image
+    avImageArray(:,:,1)= avRed;
+    avImageArray(:,:,2)= avBlue;
+    avImageArray(:,:,3)= avGreen;
+end
+%--------------------------------------------------------------------------
+
+% ------------------ Calculates background mask ---------------------------
+function[extractedLineImage] = Extractbackground(finalLineImage)      % creates background mask to remove background
+
+    EdgeErodeAmount = 1;
+    minAreaThresh = 75;     % can't set any lower or else will lose rice 
+%     BackHueLow   = 130;     % background HSV thesholds
+%     BackHueHigh  = 200;
+%     BackSatLow   = 160;
+%     BackSatHigh  = 255;
+%     BackVLow     = 0;
+%     BackVHigh    = 80;
+
+% mid angles
+%     BackHueLow   = 150;     % background HSV thesholds
+%     BackHueHigh  = 220;
+%     BackSatLow   = 80;
+%     BackSatHigh  = 200;
+%     BackVLow     = 0;
+%     BackVHigh    = 100;
+
+%     % lower angles
+    BackHueLow   = 140;     % background HSV thesholds
+    BackHueHigh  = 200;
+    BackSatLow   = 160;
+    BackSatHigh  = 255;
+    BackVLow     = 0;
+    BackVHigh    = 80;
+
+    % want to pick these values automatically using histogram thresholding 
+   % pick background area
+   % create cumulative hsv histogram
+   % determine hsv ranges
+
+    HSV = 255*rgb2hsv(finalLineImage);           % convert from RGB to HSV colour space
+    Hues=double(HSV(:,:,1));        % hue value of line image
+    Sats=double(HSV(:,:,2));      % saturation value of line image
+    Ints=double(HSV(:,:,3));       % value     
+
+    Hues(Hues<BackHueLow) = 0;
+    Hues(Hues>BackHueHigh) = 0;
+        
+    Mask = Hues;
+    Mask(Mask~=0) = 1;
+    
+    Sats = Sats.*Mask;
+    Sats(Sats<BackSatLow) = 0;
+    Sats(Sats>BackSatHigh) = 0;
+    
+    Mask = Sats;
+    Mask(Mask~=0) = 1;
+    
+    Ints = Ints.*Mask;
+    Ints(Ints<BackVLow) = 0;
+    Ints(Ints>BackVHigh) = 0;
+    Mask = Ints;
+    Mask(Mask~=0) = 1;
+    
+    Mask=abs(Mask-1);
+    se = strel('disk',EdgeErodeAmount);
+    Mask2 = imerode(Mask,se);
+    Mask3 = bwareaopen(Mask2, minAreaThresh, 4);
+    Mask = Mask3;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%invert
+    clear Mask2 Mask3 se
+    extractedLineImage(:,:,1) =Mask;
+    extractedLineImage(:,:,2) =Mask;
+    extractedLineImage(:,:,3) =Mask;
+
+end         % end of ExtractBackground
+%-------------------------------------------------------------------------
+function[avIntensity] = getIntensity(Image, blobNumber, userRegion)
+
+    % need to define which object for in user region
+    rImage = Image(:,:,1); % Red channel
+    gImage = Image(:,:,2); % Green channel
+    bImage = Image(:,:,3); % Blue channel
+    % choose pixel group from final image
+    % define an array of coordinates of area wanted
+    % These are the chosen points in the image
+
+    %pos = [626 30;646 30;646 50;626 50];    % center of almond shell (outside) test1
+    [cols,rows] = meshgrid(1:size(Image,2),1:size(Image,1)); 
+%     rowi = [173 171 175 176];     % almond shell
+%     coli= [432 438 439 434];
+    rowi = userRegion(:,2, blobNumber);     
+    coli= userRegion(:,1, blobNumber);
+    polyInd = inpolygon(cols,rows,coli,rowi);
+    %plot(coli,rowi,'go-');
+    RavIntensity = mean(rImage(polyInd));   % average R,G and B pixel values for specified area
+    GavIntensity = mean(gImage(polyInd));
+    BavIntensity = mean(bImage(polyInd));
+
+    avIntensity(:,1) = RavIntensity;
+    avIntensity(:,2) = GavIntensity;
+    avIntensity(:,3) = BavIntensity;
+    % not sure this is giving the right value
+end
+%-------------------------------------------------------------------------
+function[croppedImage] = edgeDetection(fullImage)
+
+    x = [size(fullImage,2)/2 size(fullImage,2)/2];      % picks coordinates from middle row of image to sample intensity data from
+    y = [0 size(fullImage,1)];
+    c = improfile(fullImage,x,y);   % calculates intensity profile of image along chosen coordinates
+    h = [0 size(fullImage,2)];      % picks coordinates from middle row of image to sample intensity data from
+    s = [size(fullImage,1)/2 size(fullImage,1)/2];
+    d = improfile(fullImage,h,s);   % calculates intensity profile of image along chosen coordinates
+    planeWidth = 350;        % width of blue background
+    fovEdge1 = 120;        % how much to crop off image width
+    fovEdge2 = 135;  
+    % see auto background thresholding for graphs of this process
+    %rdiff= diff(c(:,1,1));     % differentiate red channel plot
+    gdiff= diff(c(:,1,2));         % differentiate green channel plot
+    %bdiff= diff(c(:,1,3));         % differentiate blue channel plot      
+    g2diff= diff(d(:,1,2));         % differentiate green channel plot
+
+    min(gdiff);  % displays the minimum of the red gradient
+    ObjectPlaneEdge = find(gdiff == min(gdiff)); % finds the y coordinate of minimum
+    %croppedImage = imcrop(fullImage,[0, ObjectPlaneEdge, size(fullImage,2), planeWidth]);
+
+    max(g2diff);  % displays the minimum of the red gradient
+    %fovEdge = find(g2diff == min(g2diff),1); % finds the x coordinate of maximum
+    croppedImage = imcrop(fullImage,[fovEdge1, ObjectPlaneEdge+10, minus(size(fullImage,2),2*fovEdge2), planeWidth]);
+end
+
+function [meanRGB, area, centerpos, numberOfBlobs] = BlobDetection(mask, image)     % region properties
+
+rImage = image(:,:,1); % Red channel
+gImage = image(:,:,2); % Green channel
+bImage = image(:,:,3); % Blue channel
+
+bwmask = cast(mask, 'like', image); 
+bwmask = rgb2gray(bwmask);
+[labeledImage, numberOfBlobs] = bwlabel(bwmask, 8);  
+
+% Get all the blob properties
+blobMeasurementsR = regionprops(labeledImage, rImage, 'area', 'MeanIntensity');   
+blobMeasurementsG = regionprops(labeledImage, gImage, 'area', 'MeanIntensity');   
+blobMeasurementsB= regionprops(labeledImage, bImage, 'area', 'MeanIntensity');   
+center = regionprops(labeledImage, 'Centroid');  
+centerpos = cat(1,center.Centroid);  % two-column vector of x,y centroid coordinates
+
+meanRGB = zeros(numberOfBlobs, 3);  % One row for each blob.  One column for each color.
+meanRGB(:,1) = [blobMeasurementsR.MeanIntensity]';
+meanRGB(:,2) = [blobMeasurementsG.MeanIntensity]';
+meanRGB(:,3) = [blobMeasurementsB.MeanIntensity]';
+
+% Now assign the areas.
+area = zeros(numberOfBlobs, 3);  % One row for each blob.  One column for each color.
+area(:,1) = [blobMeasurementsR.Area]';
+area(:,2) = [blobMeasurementsG.Area]';
+area(:,3) = [blobMeasurementsB.Area]';
+end     % blob detection
+
