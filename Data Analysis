@@ -1,0 +1,478 @@
+clc;                     % Clear command window.
+clear;
+workspace;              % Make sure the workspace panel with all the variables is showing.
+imtool close all       % Close all figures.
+close all force
+
+minAngle = 60;           % minimum measured angle 90=6 degrees
+maxAngle = 60;          % maximum measured angle
+increment = 3;          % experimental angle increment
+i = 1;                  % iteration variable
+regionExtend = 10;      % extension of chosen pixel region from object center point (reduce for smaller objects)
+pdfs = zeros(256,2,2);
+%Bi = zeros(12000,2,2,2);
+%------------------------------FOLDER PATHS--------------------------------
+%read_folder = 'C:\Users\rebec\OneDrive\Desktop\Uni\Imperial MSc\BUHLER\camera_images\new_rig\rice_test\masked_images\';  % to read masked cropped images from
+read_folder = 'C:\Users\rebec\OneDrive\Desktop\Uni\Imperial MSc\BUHLER\camera_images\new_rig\rice_test3\masked_imagesOG\';  % to read masked cropped images from
+mask_folder = fullfile(read_folder,'mask.bmp');
+
+for angle = minAngle:increment:maxAngle         % for loop for raw image at each angle *
+    imageNum = num2str(angle);                  % converts image number to a character for use in filename*
+    angles(1,i) = angle;                        % creates an array of angles*
+    fontSize = 8;
+    col = [0.4940 0.1840 0.5560;0.9290 0.6940 0.1250];      % purple and orange codes
+
+    % folder for reading masked images
+    myFolder = fullfile(read_folder, imageNum);
+    maskedImage = imread(myFolder,"bmp");    % reads masked image
+    maskedImage = im2double(maskedImage);    % convert to double
+    imageRegions = maskedImage;
+    [region, regionNum] = regionSelect(maskedImage);    % select regions on image
+    
+    for selectNum = 1:2
+    [reducedArea, xstart, xend, ystart, yend] = imageReduction(maskedImage, region, selectNum);      % finds reduced area of image according to selected regions
+    [countsR, countsB] =  calcHist(reducedArea);    % calculates blue and red histograms
+    [pdfR, pdfB, fitR, fitB, muR, muB, sigmaR, sigmaB ] = calcPDF(reducedArea);     % calculates PDFs
+    [BichroScatterMod] = colourMapHist(reducedArea);    % calculates 2d colour map joint frequency
+    [Rav, Bav, pixTotal] = avRGB(reducedArea);
+    [Hav, Sav, Vav] = avHSV(reducedArea);
+    avRegionCol(selectNum,:) = [Rav Bav];       % average R and B values for 1- good and 2 - chalky
+    avRegionHSV(selectNum,:) = [Hav Sav Vav];
+    totalRegionPix(selectNum, 1) = pixTotal;
+    if selectNum ==1
+        [decboundR, decboundB] = linearDB(muR, muB, sigmaR, sigmaB);   % calculates linear sigma decision boundary
+        [r_ellipse, X0, Y0, phi, a, b] = covEllipse(reducedArea);
+    end
+    
+    % for each region masked image array - remove all black values then
+    % calculate average r b 
+
+
+    %disp(X0);
+    % problem - only want to calculate ellipse for good rice
+    % but want to use ellipse as db for both rice sets
+    
+    [classMask, acceptData, rejectData] = pixelHighlight(reducedArea, X0, Y0, phi, a, b);      % creates mask to highlight all pixels above decision boundary
+    [rejectCoords, PixMask] = findPixelPos(acceptData, rejectData, maskedImage, xstart, xend, ystart, yend);
+    if selectNum == 1
+        trueNegPix = size(acceptData,1);
+        falsePosPix = size(rejectData,1);
+        falseReject = rejectCoords;
+        falseMask = PixMask;
+    else
+        falseNegPix = size(acceptData,1);
+        truePosPix = size(rejectData,1);
+        trueReject = rejectCoords;
+        trueMask = PixMask;
+    end
+    
+    %-------------------------Plot 1D Histograms-------------------------
+    figure(2)
+    subplot(2, 2, 1)
+    bar(countsR, 1, 'FaceAlpha',0.6,'FaceColor',[col(selectNum, 1:3)]); hold on;
+    grid on;
+    title('Red Channel Histogram of Rice Image (background pixels removed)', 'FontSize', fontSize);
+    xlabel('Value', 'FontSize', fontSize);
+    ylabel('Counts', 'FontSize', fontSize);
+    legend('Good Rice', 'Chalky Rice');
+    xlim([0 255]);
+
+    subplot(2, 2, 3)
+    bar(countsB, 1,'FaceAlpha',0.6, 'FaceColor',[col(selectNum, 1:3)]); hold on;
+    grid on;
+    title('Blue Channel Histogram of Rice Image (background pixels removed)', 'FontSize', fontSize);
+    xlabel('Value', 'FontSize', fontSize);
+    ylabel('Counts', 'FontSize', fontSize);
+    legend('Good', 'Chalky');
+    xlim([0 255]);
+
+%--------------------------==---Plot PDFS----------------------------------
+    subplot(2,2,2)
+    % set threshold to xaxis position of means + 2.58*standard deviations
+    plot(pdfR,'Color', [col(selectNum, 1:3)], 'LineStyle',':', 'LineWidth', 1); hold on;
+    gaussR = plot(fitR); hold on;
+    set([gaussR], 'color', [col(selectNum, 1:3)], 'LineWidth', 2);
+    %xline(decboundR(1), 'LineStyle','--');             % plotted
+    %outside loop
+    grid on;
+    title('Red Channel PDF of Rice Image Histogram (background pixels removed)', 'FontSize', fontSize);
+    xlabel('Value', 'FontSize', fontSize);
+    ylabel('p(x) (PDF)', 'FontSize', fontSize);
+%     legend('Good (actual)','Good (fitted)', 'Chalky (actual)', 'Chalky (fitted)');
+    xlim([0 255]);
+
+    subplot(2,2,4)
+    plot(pdfB, 'Color', [col(selectNum, 1:3)], 'LineStyle',':', 'LineWidth', 1); hold on;
+   gaussB = plot(fitB); hold on;
+   set([gaussB], 'color',[col(selectNum, 1:3)], 'LineWidth', 2);
+    %   xline(decboundB(1), 'LineStyle','--');
+    grid on;
+    title('Blue Channel PDF of Rice Image Histogram (background pixels removed)', 'FontSize', fontSize);
+    xlabel('Value', 'FontSize', fontSize);
+    ylabel('p(x) (PDF)', 'FontSize', fontSize);
+%     legend('Good (actual)','Good (fitted)', 'Chalky (actual)', 'Chalky (fitted)');
+    xlim([0 255]);
+%---------------------Plot 2D Colourmap Histogram------------------------------
+    figure(3)
+   % subplot(1,2,1)
+    biPlot = plot(BichroScatterMod(:,2),BichroScatterMod(:,1), 'color',[col(selectNum, 1:3)], 'LineStyle','none','MarkerSize',4,'Marker','.'); hold on;
+    %line([0 decboundB(1)], [decboundR(1) decboundR(1)], 'Color', 'k', 'LineWidth',2, 'LineStyle','--');
+    %line([decboundB(1) decboundB(1)], [decboundR(1) 0], 'Color', 'k', 'LineWidth',2, 'LineStyle','--');
+    
+    % Draw the error ellipse
+    ell= plot(r_ellipse(:,1) + X0,r_ellipse(:,2) + Y0,'k--', 'LineWidth',2); hold on;
+    grid on;
+    uistack(biPlot,"bottom");
+    title('2D RGB Colour Plot for Rice');
+    legend('Chalky', 'Good', '99% Confidence Ellipse', Location='bestoutside');
+    %legend('Chalky', 'Good', 'Linear Thresholds', Location='bestoutside');
+    lim = ([0 255]);
+    axis([lim lim]);
+    grid on;
+    xlabel('Blue');
+    ylabel('Red');
+ %------------Plot highlighted image------------------------------
+%     figure(3)
+%     subplot(1,2,2)
+%     imageRegions = insertShape(imageRegions, 'Rectangle', region(1,:), 'Color', colx(1), 'LineWidth', 5); 
+%     imageRegions = insertShape(imageRegions, 'Rectangle', region(2,:), 'Color', colx(2), 'LineWidth', 5); 
+%     imshow(imageRegions); hold on;
+%     plot(rejectCoords(:,2,1),rejectCoords(:,1,1) , 'm.', 'MarkerSize', 1, 'LineWidth', 4); hold on;
+%     plot(rejectCoords(:,2,2),rejectCoords(:,1,2) , 'm.', 'MarkerSize', 1, 'LineWidth', 4); hold on;
+%     title('Masked Rice Image');
+%----------------------------3D Colour Plot--------------------------------
+    figure(4)
+    gf = plot3(BichroScatterMod(:,2),BichroScatterMod(:,1),BichroScatterMod(:,3),'color',[col(selectNum, 1:3)], 'LineStyle','none','MarkerSize',6,'Marker','.'); hold on;
+    title('3D RGB Colour Histogram Plot for Rice Classification');
+    legend('Good', 'Chalky', Location='bestoutside');
+    lim = ([0 270]);
+    axis([lim lim]);
+    grid on;
+    xlabel('Blue');
+    ylabel('Red');
+    zlabel('Frequency');
+%--------------------------------------------------------------------------
+    clear freq BichroScatter BichroScatterMod pdfR pdfB fitR fitB xg xh sigmaR sigmaB muR muB 
+    end
+
+    [reducedTrueMask] = erodeMask(trueMask);
+    [reducedFalseMask] = erodeMask(falseMask);
+    fullMask = reducedTrueMask + reducedFalseMask;
+    [row column]= find(fullMask==1);
+    reducedMaskCoord = [row column];        % array of all reject pixels after erosion
+
+    [truePosNum] = BlobDetection(reducedTrueMask);
+    [FalsePosNum] = BlobDetection(reducedFalseMask);
+    
+%     truePosPix = size(trueReject,1)
+%     falsePosPix = size(falseReject,1)
+
+    totalGood = totalRegionPix(1,1);
+    totalChalky = totalRegionPix(2,1);
+
+ fprintf('%10d  %10d  %10d  %10d',truePosPix, falsePosPix, trueNegPix, falseNegPix)
+
+    goodR = avRegionCol(1,1);
+    goodB = avRegionCol(1,2);
+    chalkyR = avRegionCol(2,1);
+    chalkyB = avRegionCol(2,2);
+
+    goodH = avRegionHSV(1,1);
+    goodS = avRegionHSV(1,2);
+    goodV = avRegionHSV(1,3);
+    chalkyH = avRegionHSV(2,1);
+    chalkyS = avRegionHSV(2,2);
+    chalkyV = avRegionHSV(2,3);
+
+    %fprintf('%f  %f  %f  %f',goodH, goodS, goodV)
+   % fprintf('%f  %f %f  %f',chalkyH, chalkyS, chalkyV)
+    % plots decision boundary onto 1d pdf plots out of loop 
+    figure(2)
+    subplot(2,2,2)
+    xline(decboundR, 'LineStyle','--');
+    %legend('Good (actual)', 'Chalky (actual)')%, 'Decision Boundary');
+    legend('Good (actual)','Good (fitted)', 'Chalky (actual)', 'Chalky (fitted)', 'Decision Boundary');
+    subplot(2,2,4)
+    xline(decboundB, 'LineStyle','--');
+    %legend('Good (actual)', 'Chalky (actual)')%, 'Decision Boundary');
+    legend('Good (actual)','Good (fitted)', 'Chalky (actual)', 'Chalky (fitted)', 'Decision Boundary');
+
+%     figure(3)
+%     subplot(1,2,2)
+    figure(5)
+    imageRegions = insertShape(imageRegions, 'Rectangle', region(1,:), 'Color', [col(1, 1:3)], 'LineWidth', 4); 
+    imageRegions = insertShape(imageRegions, 'Rectangle', region(2,:), 'Color', [col(2, 1:3)], 'LineWidth', 4); 
+    imshow(imageRegions); hold on;
+%     plot(falseReject(:,2),falseReject(:,1) , 'm.', 'MarkerSize', 1, 'LineWidth', 4); hold on;
+%     plot(trueReject(:,2),trueReject(:,1) , 'm.', 'MarkerSize', 1, 'LineWidth', 4); hold on;
+    plot(reducedMaskCoord(:,2), reducedMaskCoord(:,1), 'm.', 'MarkerSize', 1, 'LineWidth', 4); hold on;
+    title('Masked Rice Image');
+    legend('Rejected Regions > 4 pixels',Location='bestoutside');
+
+
+
+    %[reducedPixMask] = maskPix(maskedImage, goodReject, chalkyReject);
+    % create mask of 1s for rejected pixels
+    % array of 0s size of image
+    % 1s for every rejected coord
+    % then use erosion for blob<4
+%     linear boundaries on 2D plot
+%     line([0 decboundB], [decboundR decboundR], 'Color', 'k', 'LineWidth',2, 'LineStyle','--');
+%     line([decboundB decboundB], [decboundR 0], 'Color', 'k', 'LineWidth',2, 'LineStyle','--');
+  %  close all;
+    i = i+1;        % i increments with every angle
+end     % angles
+
+% function to interactively select good and chalky rice
+% 1 - accept   2 - reject
+function [region, regionNum] = regionSelect(image)
+    figure(1)
+    imshow(image);
+    accept = drawrectangle('Label', 'Accept Region','Color',[0 0 1]);
+    reject = drawrectangle('Label', 'Reject Region','Color',[1 0 0]);
+    region(1,:) = round(accept.Position);
+    region(2,:) = round(reject.Position);
+    regionNum = size(region,1);     % number of regions
+    close(1)    % closes figure once regions have been selected
+end
+
+% finds reduced image area according to selected regions
+function [reducedArea, xstart, xend, ystart, yend] = imageReduction(image, region, selectNum)
+    i = selectNum;
+    % calculated coordinates of selected region corners
+    xstart = region(i,1);   
+    ystart = region(i,2);
+    xend = xstart + region(i,3);
+    yend = ystart + region(i,4);
+    % reduces raw image to the selected regions
+    reducedArea = image(ystart:yend, xstart:xend,:)*255;
+end 
+
+% calculates histograms for red and blue
+function [countsR, countsB] =  calcHist(reducedArea)
+    % Split reduced image into RGB Channels
+    Red = reducedArea(:,:,1);
+    Blue = reducedArea(:,:,3);
+    indexes = 1;
+    countsR = histcounts(Red,'NumBins', 256, 'BinMethod','integers'); % Get Red histogram
+    countsR(indexes) = 0;       % Set those bins to zero.
+    countsB = histcounts(Blue,'NumBins', 256, 'BinMethod','integers'); % Get Blue histogram.
+    countsB(indexes) = 0;       % Set those bins to zero.
+end 
+
+% calculates red and blue PDFs
+function [pdfR, pdfB, fitR, fitB, muR, muB, sigmaR, sigmaB ] = calcPDF(reducedArea)
+    % Split reduced image into RGB Channels
+    Red = reducedArea(:,:,1);
+    Blue = reducedArea(:,:,3);
+    indexes = 1;
+
+    pdfR = histcounts(Red,256,'Normalization','pdf','BinMethod','integers');        % calculate PDF for Red
+    pdfR(indexes) = 0;  % Set those bins to zero.
+    xg = 0:size(pdfR,2)-1;
+    fitR = fit(xg',pdfR','gauss1');   % fit gaussian disribution to pdf
+
+    pdfB = histcounts(Blue,256,'Normalization','pdf','BinMethod','integers');        % calculate PDF for Blue
+    pdfB(indexes) = 0;   % Set those bins to zero.
+    xh = 0:size(pdfB,2)-1;
+    fitB = fit(xh',pdfB','gauss1');
+    
+    % calculates mean and standard deviation for fitted PDF distributiom
+    muR = fitR.b1;
+    sigmaR = fitR.c1/sqrt(2); 
+    muB = fitB.b1;
+    sigmaB = fitB.c1/sqrt(2);
+end
+
+function [BichroScatterMod] = colourMapHist(reducedArea)
+    ScatterMax = 255;
+    ScatterMin = 0;
+    bin = 0:256*256-1;
+    im = round(reducedArea);
+    im = reshape(im,[],3);
+    im = im(:,[1 3]);       % pick colours for axis of plot 1-red, 2-green, 3-blue
+    im(im(:,2)>255,:) = [];
+    im(im(:,1)>255,:) = [];     % removes 255s i.e. white data
+    im(sum(im,2)==0,:) = [];    % removes 0s i.e black background data
+    frevec = hist( (im(:,2) + 256*im(:,1)+1),bin,'BinMethod','integers')';  % joint frequency calculation
+    y = rem(bin(frevec~=0)-1,256);
+    x = round((bin(frevec~=0)-y)./256);
+    freq = 100*frevec(frevec~=0)/max(frevec);       % normalises frequency to relative frequency
+    BichroScatter = [x',y',freq];
+    
+    BichroScatterMod = BichroScatter;       %creates modifyable matrix to change max min
+    BichroScatterMod((BichroScatterMod(:,3)>ScatterMax),:) = [];    %removes values greater than max
+    BichroScatterMod((BichroScatterMod(:,3)<ScatterMin),:) = [];    %removes values less than min
+end
+
+function [decboundR, decboundB] = linearDB(muR, muB, sigmaR, sigmaB)       % calculates linear decision boundary for good rice
+    sigProbability = 2.58;          % 99% of data within this many sigma from mean  
+    decboundR = sigProbability*sigmaR + muR;      % calculates decision boundary to x sigma of good rice
+    decboundB = sigProbability*sigmaB + muB;
+end
+
+function [r_ellipse, X0, Y0, gam, a, b] = covEllipse(reducedArea)
+%function [rawData, r_ellipse, X0, Y0, phi, a, b] = covEllipse(reducedArea)
+G = reducedArea;
+rawData = reshape(G,[],3);
+rawData = rawData(:,[1 3]); 
+rawData(rawData(:,2)>255,:) = [];
+rawData(rawData(:,1)>255,:) = [];
+rawData(sum(rawData,2)==0,:) = [];
+data = [rawData(:,2) rawData(:,1)];
+
+% Calculate eigenvectors and eigenvalues
+covariance = cov(data);
+[eigenvec, eigenval ] = eig(covariance);
+
+% Get the index of the largest eigenvector
+[largest_eigenvec_ind_c, r] = find(eigenval == max(max(eigenval)));
+largest_eigenvec = eigenvec(:, largest_eigenvec_ind_c);
+
+% largest eigenvalue
+largest_eigenval = max(max(eigenval));
+
+% smallest eigenvector and eigenvalue
+if(largest_eigenvec_ind_c == 1)
+    smallest_eigenval = max(eigenval(:,2));
+    smallest_eigenvec = eigenvec(:,2);
+else
+    smallest_eigenval = max(eigenval(:,1));
+    smallest_eigenvec = eigenvec(1,:);
+end
+
+% Calculate the angle between the x-axis and the largest eigenvector
+angle = atan2(largest_eigenvec(2), largest_eigenvec(1));
+
+% This angle is between -pi and pi.
+% Let's shift it such that the angle is between 0 and 2pi
+if(angle < 0)
+    angle = angle + 2*pi;
+end
+
+% Get the coordinates of the data mean
+avg = mean(data);
+
+% 2 degrees of freedom
+% Get the 99% confidence interval error ellipse
+chi = 10.6;   % 0.99 two-tailed confidence interval
+%chi = 7.2;
+%chi = 5;   % 0.99 two-tailed confidence interval
+chisquare_val = sqrt(chi);
+% err = 0.1;
+% twoTailErr = 1-(2*err);
+% %twoTailErr = 0.90;
+% chisquare_val = chi2inv(twoTailErr,2);
+theta_grid = linspace(0,2*pi);
+gam = angle;
+X0=avg(1);      % x center coordinate
+Y0=avg(2);      % y center coordinate
+a=chisquare_val*sqrt(largest_eigenval);
+b=chisquare_val*sqrt(smallest_eigenval);
+
+%  x and y coordinates  of the ellipse
+ellipse_x_r  = a*cos( theta_grid );
+ellipse_y_r  = b*sin( theta_grid );
+% rotation matrix
+R = [ cos(gam) sin(gam); -sin(gam) cos(gam) ];
+
+% Rotate the ellipse to angle of data distribution, phi
+r_ellipse = [ellipse_x_r;ellipse_y_r]' * R;
+end
+
+function [classMask, acceptData, rejectData] = pixelHighlight(reducedArea, X0, Y0, phi, a, b)      % creates mask to highlight all pixels above decision boundary
+    % x and y are raw data coords
+    % center coords X0 and Y0
+    G = reducedArea;
+    rawData = reshape(G,[],3);
+    rawData = rawData(:,[1 3]); 
+    rawData(rawData(:,2)>255,:) = [];
+    rawData(rawData(:,1)>255,:) = [];
+    rawData(sum(rawData,2)==0,:) = [];
+
+    x = rawData(:,2);   % blue
+    y = rawData(:,1);   % red
+    xr = x - X0;
+    yr = y - Y0;
+    x0 = cos(phi)*xr + sin(phi)*yr;
+    y0 = -sin(phi)*xr + cos(phi)*yr;
+    classMask = x0.^2 / a^2 + y0.^2 / b^2 < 1;
+    acceptData = [x(classMask),y(classMask)]; % all pixels outside of ellipse (chalky and good?)
+    rejectData = [x(~classMask),y(~classMask)]; % all red-blue pixel values outside ellipse
+    % need to find corresponding image coordinates of these values
+end
+
+function [rejectCoords, reducedPixMask] = findPixelPos(acceptData, rejectData, maskedImage, xstart, xend, ystart, yend)
+    fullImage = maskedImage*255;
+    reducedPixMask = zeros(size(maskedImage,1), size(maskedImage,2));
+    p=1;
+    for q = ystart:yend
+            for w = xstart:xend
+                for g = 1:size(rejectData)
+                    if fullImage(q,w,3)==rejectData(g,1) && fullImage(q,w,1)==rejectData(g,2)
+                        rejectCoords(p,:) = [q ,w];
+                        reducedPixMask(q,w)=1;
+                        p=p+1;
+                    end
+                end
+            end
+    end
+end
+
+function [reducedPixMask] = erodeMask(mask)
+    reducedPixMask = bwareaopen(mask,5);        % removes all highlighted regions of 4 pixels or below
+end
+
+function [numberOfBlobs] = BlobDetection(bwmask)     % region properties
+% 
+% bwmask = cast(mask, 'like', image); 
+% bwmask = rgb2gray(bwmask);
+[labelledImage, numberOfBlobs] = bwlabel(bwmask, 8);  
+
+% Get all the blob properties
+% blobMeasurementsR = regionprops(labeledImage, rImage, 'area', 'MeanIntensity');   
+% blobMeasurementsG = regionprops(labeledImage, gImage, 'area', 'MeanIntensity');   
+% blobMeasurementsB= regionprops(labeledImage, bImage, 'area', 'MeanIntensity');   
+% center = regionprops(labeledImage, 'Centroid');  
+% centerpos = cat(1,center.Centroid);  % two-column vector of x,y centroid coordinates
+
+% meanRGB = zeros(numberOfBlobs, 3);  % One row for each blob.  One column for each color.
+% meanRGB(:,1) = [blobMeasurementsR.MeanIntensity]';
+% meanRGB(:,2) = [blobMeasurementsG.MeanIntensity]';
+% meanRGB(:,3) = [blobMeasurementsB.MeanIntensity]';
+% 
+% % Now assign the areas.
+% area = zeros(numberOfBlobs, 3);  % One row for each blob.  One column for each color.
+% area(:,1) = [blobMeasurementsR.Area]';
+% area(:,2) = [blobMeasurementsG.Area]';
+% area(:,3) = [blobMeasurementsB.Area]';
+end     % blob detection
+
+function [Rav, Bav, pixTotal] = avRGB(region)
+    im = round(region);
+    im = reshape(im,[],3);
+    im = im(:,[1 3]);       % pick colours for axis of plot 1-red, 2-green, 3-blue
+    im(im(:,2)>255,:) = [];
+    im(im(:,1)>255,:) = [];     % removes 255s i.e. white data
+    im(sum(im,2)==0,:) = [];    % removes 0s i.e black background data
+    pixTotal = size(im,1);      % total number of rice pixels in region
+    Rav = mean(im(:,1));
+    Bav = mean(im(:,2));
+end
+
+function [Hav, Sav, Vav] = avHSV(region)
+    region = region./255;
+    region = rgb2hsv(region)*255;
+    im = region;
+ %   im = round(region);
+    im = reshape(im,[],3);
+    %im = im(:,[1 3]);       % pick colours for axis of plot 1-red, 2-green, 3-blue
+    im(im(:,2)>255,:) = [];
+    im(im(:,2)>255,:) = [];
+    im(im(:,1)>255,:) = [];     % removes 255s i.e. white data
+    im(sum(im,2)==0,:) = [];    % removes 0s i.e black background data
+    %pixTotal = size(im,1);      % total number of rice pixels in region
+    Hav = mean(im(:,1));
+    Sav = mean(im(:,2));
+    Vav = mean(im(:,3));
+end
