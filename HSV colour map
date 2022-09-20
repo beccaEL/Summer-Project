@@ -1,0 +1,337 @@
+
+    % plots 2D colour histogram for selected regions of image
+
+%-----------------TO DO-------------------------------------
+% remove pixel clusters of 4 of below from reject array -- can just perform
+% erosion after thresholding and view results
+% find automatic decision boundary method :
+% extra - find how to improve QDA method
+% display QDA results on rice map to see
+
+% implement QDA classification into this code
+% plot QDA results onto image
+
+clc;                     % Clear command window.
+clear;
+workspace;              % Make sure the workspace panel with all the variables is showing.
+imtool close all       % Close all figures.
+close all force
+
+minAngle = 15;           % minimum measured angle 
+maxAngle = 15;          % maximum measured angle
+increment = 3;          % experimental angle increment
+i = 1;                  % iteration variable
+regionExtend = 10;      % extension of chosen pixel region from object center point (reduce for smaller objects)
+pdfs = zeros(256,2,2);
+Bi = zeros(12000,2,2,2);
+%------------------------------FOLDER PATHS--------------------------------
+read_folder = 'C:\Users\rebec\OneDrive\Desktop\Uni\Imperial MSc\BUHLER\camera_images\new_rig\rice_test\masked_images\';  % to read masked cropped images from
+mask_folder = fullfile(read_folder,'mask.bmp');
+
+for angle = minAngle:increment:maxAngle         % for loop for raw image at each angle *
+   imageNum = num2str(angle);                  % converts image number to a character for use in filename*
+   angles(1,i) = angle;                        % creates an array of angles*
+
+   % folder for reading masked images
+   myFolder = fullfile(read_folder, imageNum);
+   maskedImage = imread(myFolder,"bmp");
+   maskedImage = im2double(maskedImage);
+   hsvim = rgb2hsv(maskedImage)*255;
+   %figure();
+   %imshow(hsvim);
+    
+   [region] = regionSelect(maskedImage);
+   [trainX, trainY, pdfs] = createColourPlot(maskedImage, region, pdfs);
+   %[rejectMask] = pixelHighlight(image, region, RedBoundary, BlueBoundary)
+
+
+   i = i+1;        % i increments with every angle
+end     % angles
+
+
+function [region] = regionSelect(image)
+figure(1)
+imshow(image);
+accept = drawrectangle('Label', 'Accept Region','Color',[0 0 1]);
+reject = drawrectangle('Label', 'Reject Region','Color',[1 0 0]);
+region(1,:) = round(accept.Position);
+region(2,:) = round(reject.Position);
+close(1)    % closes figure once regions have been selected
+end
+
+
+function [trainX, trainY, pdfs] = createColourPlot(image, region, pdfs)
+% require image to be DOUBLE so check
+    col = ["b", "r"];
+    colx = ["blue", "red"];
+    rgbImage = image;
+    imageRegions = image;
+    image = rgb2hsv(image);
+    ScatterMax = 255;
+    ScatterMin = 0;
+    %imageRegions = image;
+    rejectPixels = zeros(size(image,1), 2);
+    imageFull = rgbImage*255;
+    %decboundR = 165;        % manually defined decision boundaries for RED and BLUE
+    %decboundB = 165;
+
+    for i = [1 2]       % 1-accept 2-reject
+        
+        lineCol = col(1,i);
+        rectCol = colx(1,i);
+        % coordinates of chosen area to create plot of
+        xstart = region(i,1);
+        ystart = region(i,2);
+        xend = xstart + region(i,3);
+        yend = ystart + region(i,4);
+        
+        reducedArea = image(ystart:yend, xstart:xend,:)*255;
+        
+        bin = 0:256*256-1;
+        im = round(reducedArea);
+        im = reshape(im,[],3);
+        im = im(:,[1 2]);       % pick colours for axis of plot 1-hue, 2-sat, 3-value
+        im(im(:,2)>255,:) = [];
+        im(im(:,1)>255,:) = [];
+        im(sum(im,2)==0,:) = [];
+        frevec = hist( (im(:,2) + 256*im(:,1)+1),bin)';
+        y = rem(bin(frevec~=0)-1,256);
+        x = round((bin(frevec~=0)-y)./256);
+        freq = 100*frevec(frevec~=0)/max(frevec);
+        BichroScatter = [x',y',freq];
+        
+        BichroScatterMod = BichroScatter;%creates modifyable matrix to change max min
+        BichroScatterMod((BichroScatterMod(:,3)>ScatterMax),:) = [];%removes values greater than max
+        BichroScatterMod((BichroScatterMod(:,3)<ScatterMin),:) = [];%removes values less than min
+        
+        if i==1
+        acceptDataSet = BichroScatterMod;
+        end
+        if i==2
+        rejectDataSet = BichroScatterMod;   
+        end
+
+        % --------------------------1D histograms--------------------------
+        fontSize = 8;
+        %Split into RGB Channels
+        Hue = reducedArea(:,:,1);
+        Sat = reducedArea(:,:,2);
+        Value = reducedArea(:,:,3);
+
+        xx = Hue;
+        yy = Sat;
+        %disp(max(Red,[],'all'));
+        
+        countsR = histcounts(xx,'NumBins', 256, 'BinMethod','integers'); % Get histogram.
+        indexes = 1;
+        countsR(indexes) = 0; % Set those bins to zero.
+        %countsArr(i,:) = countsR;
+        figure(2)
+
+        subplot(2, 2, 1)
+        bar(countsR, 1, 'FaceAlpha',0.6); hold on;
+        grid on;
+        title('Saturation Channel Histogram of Rice Image (background pixels removed)', 'FontSize', fontSize);
+        xlabel('Value', 'FontSize', fontSize);
+        ylabel('Counts', 'FontSize', fontSize);
+        legend('Good Rice', 'Chalky Rice');
+        xlim([0 255]);
+
+        
+        countsB = histcounts(yy,'NumBins', 256, 'BinMethod','integers'); % Get histogram.
+        countsB(indexes) = 0; % Set those bins to zero.
+        subplot(2, 2, 3)
+        bar(countsB, 1,'FaceAlpha',0.6); hold on;
+        grid on;
+        title('Value Channel Histogram of Rice Image (background pixels removed)', 'FontSize', fontSize);
+        xlabel('Value', 'FontSize', fontSize);
+        ylabel('Counts', 'FontSize', fontSize);
+        legend('Good', 'Chalky');
+        xlim([0 255]);
+
+        subplot(2,2,2)
+        % pdf is normalised to give relative frequency so does not matter
+        % how many in each class
+        % the histograms are not normalised so will be affected by relative
+        % number in each class
+        pdfR = histcounts(xx,256,'Normalization','pdf','BinMethod','integers');    
+        pdfR(indexes) = 0; % Set those bins to zero.
+        %smoothPdfR = smoothdata(pdfR,'gaussian');
+        xg = 0:size(pdfR,2)-1;
+        f1 = fit(xg',pdfR','gauss1');   % fit gaussian disribution to pdf
+        % work out mean and standard deviation
+        % set threshold to xaxis position of means + 2.58*standard deviations
+        plot(pdfR,'Color', col(i), 'LineStyle','--'); hold on;
+        %plot(smoothPdfR); hold on;
+        gaussR = plot(f1); hold on;
+        set([gaussR], 'color', col(i));
+        muR = f1.b1;
+        sigmaR = f1.c1/sqrt(2); % calculates sigma for gaussian fitted pdf curve
+        decboundR(i) = 2.33*sigmaR + muR;      % sets decision boundary to x sigma of good rice
+        %xline(decboundR(1), 'LineStyle','--');             % plotted
+        %outside loop
+        grid on;
+        title('Saturation Channel PDF of Rice Image Histogram (background pixels removed)', 'FontSize', fontSize);
+        xlabel('Value', 'FontSize', fontSize);
+        ylabel('p(x) (PDF)', 'FontSize', fontSize);
+        legend('Good (actual)','Good (fitted)', 'Chalky (actual)', 'Chalky (fitted)');
+        xlim([0 255]);
+        subplot(2,2,4)
+        pdfB = histcounts(yy,256,'Normalization','pdf','BinMethod','integers');
+        pdfB(indexes) = 0; % Set those bins to zero.
+        %smoothPdfB = smoothdata(pdfB, 'gaussian');  % use gaussian smoothing method to smooth pdf data
+        xh = 0:size(pdfB,2)-1;
+        f2 = fit(xh',pdfB','gauss1');
+        %plot(smoothPdfB);hold on;   % smoothed pdf plot
+        plot(pdfB, 'Color', col(i), 'LineStyle','--'); hold on;
+        gaussB = plot(f2);
+        set([gaussB], 'color', col(i));
+        muB = f2.b1;
+        sigmaB = f2.c1/sqrt(2);
+        decboundB(i) = 2.33*sigmaB + muB;
+        %xline(decboundB(1), 'LineStyle','--');
+        %plot(pdfB, 'b');        % actual pdf plot
+        grid on;
+        title('Value Channel PDF of Rice Image Histogram (background pixels removed)', 'FontSize', fontSize);
+        xlabel('Value', 'FontSize', fontSize);
+        ylabel('p(x) (PDF)', 'FontSize', fontSize);
+        %legend('Good (actual)','Good (fitted)', 'Chalky (actual)', 'Chalky (fitted)');
+        xlim([0 255]);
+
+
+        
+        %pdfs(1:length(f1),i,1) = f1'; % layer 1: column 1 good red pdf, column 2 bad red pdf
+        %pdfs(1:length(f2),i,2) = f2'; % layer 2:  column 1 good blue pdf, column 2 blue red pdf
+        
+        %--------------HIGHLIGHTING POINTS---------------------------------
+
+        % create mask highlighting all pixels above decision boundary
+        % ignored any pixel clusters of 4 of below as this is not
+        % considered chalky
+        p = 1;
+        % only search through reduced are but use whole image to get actual coordinates
+        for q = ystart:yend
+            %for w = 1:size(imageFull,2)
+            for w = xstart:xend
+                if imageFull(q,w,1)>decboundR(1) && imageFull(q,w,2)>decboundB(1) && imageFull(q,w,1)<255 && imageFull(q,w,2)<255    % if pixel values are above the decision boundary i.e. reject
+                    % create coordinate array of all points
+                    rejectCoords(p,:) = [q ,w];
+                    p=p+1;
+                end
+            end
+        end
+        %isempty(rejectCoords)=0;
+        rejectPixels(1:size(rejectCoords,1),1:size(rejectCoords,2),i) = rejectCoords;  % contains coords of reject pixels layer 1 accept and layer 2 reject 
+
+        % if pixel cluster<=4 then remove coordinates from array
+        % how to do this
+    
+        % ------------------------Plot 2D histograms-----------------------
+        figure(3)
+        subplot(1,2,1)
+        a = plot(BichroScatterMod(:,2),BichroScatterMod(:,1), lineCol, 'LineStyle','none','MarkerSize',4,'Marker','d'); hold on;
+        line([0 decboundB(1)], [decboundR(1) decboundR(1)], 'Color', 'k', 'LineWidth',2, 'LineStyle','--');
+        line([decboundB(1) decboundB(1)], [decboundR(1) 0], 'Color', 'k', 'LineWidth',2, 'LineStyle','--');
+%         mu = [muR muB];
+%         sigma = [sigmaR ;sigmaB];
+%         hg = mvnpdf(BichroScatterMod(:,1:2),mu);
+        uistack(a,"bottom");
+        title('2D Colour Histogram Plot for Rice');
+        legend('Chalky', 'Good', Location='bestoutside');
+        lim = ([0 270]);
+        axis([lim lim]);
+        grid on;
+        xlabel('Value');
+        ylabel('Saturation');
+
+        figure(4)%   3d plot
+        gf = plot3(BichroScatterMod(:,2),BichroScatterMod(:,1),BichroScatterMod(:,3),lineCol, 'LineStyle','none','MarkerSize',4,'Marker','d'); hold on;
+     
+        % mapcaplot(BichroScatterMod); % pca plot of good and chalky
+        %------------Plot highlighted image------------------------------
+%         subplot(1,2,2)
+%         imageRegions = insertShape(imageRegions, 'Rectangle', region(i,:), 'Color', rectCol, 'LineWidth', 5); 
+%         imshow(imageRegions); hold on;
+%         %imageRegions = insertMarker(imageRegions,rejectPixels(:,:,i),'o','size',1);
+%         rejectPix = plot(rejectPixels(:,2,i),rejectPixels(:,1,i) , 'r.', 'MarkerSize', 1, 'LineWidth', 2); hold on;
+%        % imshow(imageRegions); hold on;
+%         %uistack(ty,"bottom");
+%         uistack(rejectPix,"top");
+%         title('Masked Rice Image');
+
+        clear freq BichroScatter BichroScatterMod pdfR pdfB rejectPoints p rejectCoords f1 f2 xg xh sigmaR sigmaB muR muB
+    end
+        
+    % plots decision boundary onto 1d pdf plots out of loop 
+        figure(2)
+        subplot(2,2,2)
+        xline(decboundR(1), 'LineStyle','--');
+        legend('Good (actual)','Good (fitted)', 'Chalky (actual)', 'Chalky (fitted)', 'Decision Boundary');
+        subplot(2,2,4)
+        xline(decboundB(1), 'LineStyle','--');
+        legend('Good (actual)','Good (fitted)', 'Chalky (actual)', 'Chalky (fitted)', 'Decision Boundary');
+
+        
+        %------------Plot highlighted image------------------------------
+
+        figure(3)
+        subplot(1,2,2)
+        imageRegions = insertShape(imageRegions, 'Rectangle', region(1,:), 'Color', colx(1), 'LineWidth', 5); 
+        imageRegions = insertShape(imageRegions, 'Rectangle', region(2,:), 'Color', colx(2), 'LineWidth', 5); 
+        imshow(imageRegions); hold on;
+        plot(rejectPixels(:,2,1),rejectPixels(:,1,1) , 'm.', 'MarkerSize', 1, 'LineWidth', 4); hold on;
+        plot(rejectPixels(:,2,2),rejectPixels(:,1,2) , 'm.', 'MarkerSize', 1, 'LineWidth', 4); hold on;
+        title('Masked Rice Image');
+
+    % find number of rice pixels on each side and calculate percentage
+    % detected
+
+        % generate training dataset and labels
+        accept = acceptDataSet(:,1:2);
+        reject = rejectDataSet(:,1:2);
+        numLabelsAccept = size(accept,1);
+        numLabelsReject = size(reject,1);
+        trainX = [accept;reject];        % combined dataset 
+        labelsAccept = ones(numLabelsAccept,1);
+        labelsReject = zeros(numLabelsReject,1);
+        trainY = [labelsAccept;labelsReject];   % combined labels
+        
+        %save('rice_pdf.mat', 'pdfs')
+        %save('rice_dataset.mat','trainX', 'trainY','accept','reject');
+
+%     riceDataSet(:,:,1)= acceptDataSet;
+%     riceDataSet(:,:,2)= rejectDataSet;
+end
+
+
+function [rejectMask] = pixelHighlight(image, region, RedBoundary, BlueBoundary)
+    
+    % coordinates of chosen area to create plot of
+    xstart = region(i,1);
+    ystart = region(i,2);
+    xend = xstart + region(i,3);
+    yend = ystart + region(i,4);
+    
+    reducedArea = image(ystart:yend, xstart:xend,:)*255;    % reduced image array
+    rejectMask = zeroes(size(reducedArea,1),size(reducedArea,2));
+    % create mask highlighting all image points 
+    for i = 1:size(reducedArea,1)
+        for j = 1:1:size(reducedArea,2)
+            if reducedArea(i,j)>RedBoundary&&BlueBoundary       % if pixel values are above the decision boundary i.e. reject
+                % plot point on mask
+                rejectMask(i,j)=1;
+            end
+        end
+    end
+end
+
+
+% TO DO
+% draw line onto histogram
+% be able to highlight separated data on original image
+% need to be able to save dataset so can run it through the SLP
+
+% Improvements
+% sort legends so that always the correct one for accept/reject
+% plot interactive image on same plot as empty histogram
+% get histogram to update as the roi rectangle position/area is changed
